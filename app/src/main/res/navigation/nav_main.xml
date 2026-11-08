@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<navigation xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/nav_main"
+    app:startDestination="@id/monitorFragment">
+
+    <!-- 监测页：启动就停在这里 -->
+    <fragment
+        android:id="@+id/monitorFragment"
+        android:name="com.motionguardian.kid.ui.monitor.MonitorFragment"
+        android:label="@string/nav_monitor" />
+
+    <!-- 统计页 -->
+    <fragment
+        android:id="@+id/statsFragment"
+        android:name="com.motionguardian.kid.ui.stats.StatsFragment"
+        android:label="@string/nav_stats" />
+
+    <!-- 设置页 -->
+    <fragment
+        android:id="@+id/settingsFragment"
+        android:name="com.motionguardian.kid.ui.settings.SettingsFragment"
+        android:label="@string/nav_settings" />
+
+</navigation>

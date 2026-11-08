@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 字号：孩子端要大字，屏幕离得比手机远 -->
+    <dimen name="text_display">32sp</dimen>
+    <dimen name="text_title">24sp</dimen>
+    <dimen name="text_body">18sp</dimen>
+    <dimen name="text_caption">14sp</dimen>
+
+    <!-- 圆角：Soft Tech 风格，28dp 是卡片主圆角 -->
+    <dimen name="radius_card">28dp</dimen>
+    <dimen name="radius_button">20dp</dimen>
+    <dimen name="radius_pill">999dp</dimen>
+
+    <!-- 间距 -->
+    <dimen name="space_xs">4dp</dimen>
+    <dimen name="space_s">8dp</dimen>
+    <dimen name="space_m">16dp</dimen>
+    <dimen name="space_l">24dp</dimen>
+    <dimen name="space_xl">32dp</dimen>
+</resources>

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 注意：id 必须和 nav_main.xml 里的 fragment id 完全一致 -->
+    <item
+        android:id="@+id/monitorFragment"
+        android:icon="@drawable/ic_nav_monitor"
+        android:title="@string/nav_monitor" />
+    <item
+        android:id="@+id/statsFragment"
+        android:icon="@drawable/ic_nav_stats"
+        android:title="@string/nav_stats" />
+    <item
+        android:id="@+id/settingsFragment"
+        android:icon="@drawable/ic_nav_settings"
+        android:title="@string/nav_settings" />
+</menu>

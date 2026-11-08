@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 暗态下品牌色略微提亮，否则在深底上显得脏 -->
+    <color name="brand_primary">#4FBFAE</color>
+    <color name="brand_primary_dark">#3FA796</color>
+    <color name="brand_primary_container">#0F3B34</color>
+    <color name="on_brand_primary_container">#B9E8DF</color>
+
+    <color name="brand_secondary">#7FB0D8</color>
+    <color name="brand_secondary_container">#12324A</color>
+    <color name="on_brand_secondary_container">#C7E1F5</color>
+
+    <color name="semantic_good">#5FC7AA</color>
+    <color name="semantic_warn">#F5B45E</color>
+    <color name="semantic_alert">#EE8271</color>
+    <color name="semantic_good_container">#10332C</color>
+    <color name="semantic_warn_container">#3A2A12</color>
+    <color name="semantic_alert_container">#3D1D18</color>
+
+    <color name="bg_page">#101413</color>
+    <color name="bg_surface">#191E1D</color>
+    <color name="text_primary">#E4E9E7</color>
+    <color name="text_secondary">#A0AAA7</color>
+    <color name="divider">#2A3130</color>
+
+    <color name="white">#FFFFFF</color>
+    <color name="black">#000000</color>
+    <color name="camera_backdrop">#000000</color>
+</resources>

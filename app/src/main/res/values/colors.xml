@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- ================= 品牌色（光态） ================= -->
+    <color name="brand_primary">#3FA796</color>
+    <color name="brand_primary_dark">#2E7D72</color>
+    <color name="brand_primary_container">#CDEDE6</color>
+    <color name="on_brand_primary_container">#07322C</color>
+
+    <color name="brand_secondary">#5A8FBF</color>
+    <color name="brand_secondary_container">#D6E7F5</color>
+    <color name="on_brand_secondary_container">#0B2A42</color>
+
+    <!-- ================= 语义色 ================= -->
+    <!-- good：姿势正常 / warn：轻度偏离 / alert：需要提醒 -->
+    <color name="semantic_good">#4CAF93</color>
+    <color name="semantic_warn">#F2A33C</color>
+    <color name="semantic_alert">#E5674E</color>
+    <color name="semantic_good_container">#D3F0E6</color>
+    <color name="semantic_warn_container">#FCEBD2</color>
+    <color name="semantic_alert_container">#FBDDD7</color>
+
+    <!-- ================= 中性色 ================= -->
+    <color name="bg_page">#F7F9F8</color>
+    <color name="bg_surface">#FFFFFF</color>
+    <color name="text_primary">#1B1F1E</color>
+    <color name="text_secondary">#5A6360</color>
+    <color name="divider">#E3E8E6</color>
+
+    <color name="white">#FFFFFF</color>
+    <color name="black">#000000</color>
+    <color name="camera_backdrop">#000000</color>
+</resources>
