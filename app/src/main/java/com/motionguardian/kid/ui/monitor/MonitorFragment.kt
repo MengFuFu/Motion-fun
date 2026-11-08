@@ -5,26 +5,34 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import androidx.annotation.ColorRes
+import androidx.camera.core.CameraSelector
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
+import androidx.lifecycle.lifecycleScope
 import com.motionguardian.kid.R
 import com.motionguardian.kid.core.camera.CameraChecker
 import com.motionguardian.kid.core.camera.CameraPermissionLauncher
 import com.motionguardian.kid.databinding.FragmentMonitorBinding
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.Job
 import javax.inject.Inject
+import com.motionguardian.kid.core.camera.CameraPreviewController
+import com.motionguardian.kid.core.camera.CameraStartResult
+import kotlinx.coroutines.launch
 
 /**
  * 监测页。
  *
- * 本任务点只做「权限 + 状态展示」，不接相机预览——那是 T04。
- * 页面行为是一个显式状态机：每次渲染都重新算一遍真实状态再画，
- * 而不是靠一堆 boolean 记「我现在是不是在授权中」。
- * 状态少的时候，「每次都重新算」永远比「增量更新」更不容易出 bug。
+ * 本任务点做到「权限 → 相机预览」，还不做姿态识别（T05）。
  *
- * @AndroidEntryPoint 让 Hilt 注入生效：它会把 Fragment 的父类从 Fragment
- * 换成 Hilt_MonitorFragment，后者在 onCreate 里完成字段注入。
- * 所以 @Inject 字段在 onCreate 之后才可用，不能用它的值去初始化同名字段的默认值。
+ * 页面结构是三层：预览在最底、状态面板盖在上面、就绪胶囊浮在右上角。
+ * 状态机仍然是「每次渲染都重新算真实状态」，不缓存 boolean——
+ * 权限和相机都是外部可变状态，缓存只会制造不一致。
+ *
+ * 生命周期要点（这步最容易错的就这三条）：
+ *  1. 相机绑 viewLifecycleOwner，不绑 Fragment 自己、更不绑 Activity；
+ *  2. 启动放在 onViewCreated/onResume 之后的协程里，不要在 onCreateView 里同步做；
+ *  3. onDestroyView 必须 stop()，否则 Surface 泄漏、再进来黑屏。
  */
 @AndroidEntryPoint
 class MonitorFragment : Fragment() {
@@ -39,6 +47,15 @@ class MonitorFragment : Fragment() {
     // 权限申请器必须在 onCreate 里构造（即 STARTED 之前完成注册）。
     private lateinit var permissionLauncher: CameraPermissionLauncher
 
+    /** 相机控制器不注入（它只需要 Context，没必要进 DI 图），View 重建时一起重建。 */
+    private var previewController: CameraPreviewController? = null
+
+    /** 启动预览的协程，用于避免重复启动。 */
+    private var startJob: Job? = null
+
+    /** 预览是否已经成功绑上（绑定成功一次就不再重复绑）。 */
+    private var previewBound = false
+
     // 只在「本次进入页面」自动弹一次，避免用户拒绝后又立刻被弹第二次。
     private var autoRequestDone = false
 
@@ -49,13 +66,10 @@ class MonitorFragment : Fragment() {
     private enum class UiState {
         /** 设备没有摄像头。 */
         NO_CAMERA,
-
         /** 还没授权，但还能弹系统框（首次，或被拒后仍允许再问）。 */
         REQUESTABLE,
-
         /** 被永久拒绝，只能去系统设置。 */
         PERMANENTLY_DENIED,
-
         /** 权限已拿到，可以进入监测（T04 之前先显示占位）。 */
         READY
     }
@@ -88,6 +102,7 @@ class MonitorFragment : Fragment() {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
 
+        previewController = CameraPreviewController(requireContext())
         binding.btnStateAction.setOnClickListener { onActionClick() }
 
         render()
@@ -104,6 +119,14 @@ class MonitorFragment : Fragment() {
 
     override fun onDestroyView() {
         super.onDestroyView()
+
+        // 顺序很重要：先取消协程，再解绑相机，最后丢引用。
+        // 反过来的话，协程可能在解绑之后又把相机绑上，最后一帧泄漏。
+        startJob?.cancel()
+        startJob = null
+        previewController?.stop()
+        previewController = null
+        previewBound = false
         // 必须置 null：Fragment 进返回栈时 View 已销毁，留着引用就是内存泄漏
         _binding = null
     }
@@ -129,53 +152,56 @@ class MonitorFragment : Fragment() {
 
     // ==================== 渲染 ====================
     private fun render() {
-        when(val state = resolveState()) {
-            UiState.NO_CAMERA -> bind(
-                titleRes = R.string.camera_no_hardware_title,
-                descRes = R.string.camera_no_hardware_desc,
-                actionTextRes = null,
-                iconColorRes = R.color.text_secondary,
-            )
+        when (resolveState()) {
+            UiState.READY -> {
+                // 就绪：藏面板、亮出预览
+                binding.panelState.visibility = View.GONE
+                startPreview()
+            }
 
-            UiState.READY -> bind(
-                titleRes = R.string.camera_ready_title,
-                descRes = R.string.camera_ready_desc,
-                actionTextRes = null,
-                iconColorRes = R.color.semantic_good,
-            )
+            UiState.NO_CAMERA -> {
+                showPanel(
+                    titleRes = R.string.camera_no_hardware_title,
+                    descRes = R.string.camera_no_hardware_desc,
+                    actionTextRes = null,
+                    iconColorRes = R.color.text_secondary,
+                )
+            }
 
-            UiState.REQUESTABLE -> bind(
-                titleRes = R.string.camera_need_title,
-                // 首次和被拒后的话术不同：首次要讲清「数据不出本机」，
-                // 被拒后不重复大道理、只说怎么补救。
-                descRes = if (cameraChecker.wasAskedBefore()) {
-                    R.string.camera_need_desc_again
-                } else {
-                    R.string.camera_need_desc_first
-                },
-                actionTextRes = R.string.camera_grant,
-                iconColorRes = R.color.brand_primary,
-            )
+            UiState.REQUESTABLE -> {
+                showPanel(
+                    titleRes = R.string.camera_need_title,
+                    descRes = if (cameraChecker.wasAskedBefore()) {
+                        R.string.camera_need_desc_again
+                    } else {
+                        R.string.camera_need_desc_first
+                    },
+                    actionTextRes = R.string.camera_grant,
+                    iconColorRes = R.color.brand_primary,
+                )
+            }
 
-            UiState.PERMANENTLY_DENIED -> bind(
-                titleRes = R.string.camera_denied_title,
-                descRes = R.string.camera_denied_desc,
-                actionTextRes = R.string.camera_open_settings,
-                iconColorRes = R.color.semantic_warn,
-            )
+            UiState.PERMANENTLY_DENIED -> {
+                showPanel(
+                    titleRes = R.string.camera_denied_title,
+                    descRes = R.string.camera_denied_desc,
+                    actionTextRes = R.string.camera_open_settings,
+                    iconColorRes = R.color.semantic_warn,
+                )
+            }
         }
     }
 
-    /**
-     * 把四个控件一次性改到位。
-     * 集中成一个函数，是为了避免「某个分支忘了隐藏按钮」这类漏改。
-     */
-    private fun bind(
+    /** 显示状态面板（并保证预览胶囊不挡在上面）。 */
+    private fun showPanel(
         titleRes: Int,
         descRes: Int,
         actionTextRes: Int?,
         @ColorRes iconColorRes: Int,
     ) {
+        binding.panelState.visibility = View.VISIBLE
+        binding.tvPreviewBadge.visibility = View.GONE
+
         binding.tvStateTitle.setText(titleRes)
         binding.tvStateDesc.setText(descRes)
         binding.ivStateIcon.imageTintList =
@@ -187,6 +213,61 @@ class MonitorFragment : Fragment() {
             binding.btnStateAction.visibility = View.VISIBLE
             binding.btnStateAction.setText(actionTextRes)
         }
+    }
+
+    // ==================== 相机 ====================
+
+    /**
+     * 启动预览。三重防抖：
+     *  - 已经绑成功了就不再绑（previewBound）
+     *  - 正在启动中就不再启动（startJob.isActive）
+     *  - 视图已销毁就不启动（_binding == null）
+     * 没有这三层的话，onResume → render 会被反复触发，导致相机反复 bind/unbind。
+     */
+    private fun startPreview() {
+        if(previewBound) return
+        if(startJob?.isActive == true) return
+        val controller = previewController ?: return
+        val owner = viewLifecycleOwner
+
+        startJob = viewLifecycleOwner.lifecycleScope.launch {
+            when(val result = controller.start(binding.previewView, owner)) {
+                is CameraStartResult.Success -> {
+                    previewBound = true
+                    showBadge(result.lensFacing)
+                }
+
+                CameraStartResult.NoCamera -> {
+                    // 理论上 hasCameraHardware 已经挡过一次，这里是双保险
+                    showPanel(
+                        titleRes = R.string.camera_no_hardware_title,
+                        descRes = R.string.camera_no_hardware_desc,
+                        actionTextRes = null,
+                        iconColorRes = R.color.text_secondary,
+                    )
+                }
+
+                is CameraStartResult.Failed -> {
+                    showPanel(
+                        titleRes = R.string.camera_error_title,
+                        descRes = R.string.camera_error_desc,
+                        actionTextRes = null,
+                        iconColorRes = R.color.semantic_alert,
+                    )
+                }
+            }
+        }
+    }
+
+    private fun showBadge(lensFacing: Int?) {
+        val lens = if (lensFacing == CameraSelector.LENS_FACING_FRONT) {
+            R.string.camera_badge_front
+        } else {
+            R.string.camera_badge_back
+        }
+        binding.tvPreviewBadge.text =
+            getString(lens) + " " + getString(R.string.camera_badge_ready)
+        binding.tvPreviewBadge.visibility = View.VISIBLE
     }
 
     // ==================== 交互 ====================
@@ -225,3 +306,4 @@ class MonitorFragment : Fragment() {
         requestPermission()
     }
 }
+

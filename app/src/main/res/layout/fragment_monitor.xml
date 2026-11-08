@@ -1,28 +1,40 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  监测页 = 一个居中的「状态面板」。
-  五种状态（无相机 / 需要授权 / 授权被拒 / 就绪 / 后续的监测中）共用同一套控件，
-  只切换图标色、标题、说明和按钮文案——比给每个状态各写一个布局好维护得多。
+  监测页分三层，从下往上叠：
+    1) PreviewView  —— 相机画面，铺满整屏（永远是底层）
+    2) panel_state  —— 状态面板，只有「没权限 / 没相机 / 出错」时才显示，
+                       它自带不透明背景，会把预览完全盖住
+    3) tv_preview_badge —— 右上角小胶囊，出画面后显示「前置相机 · 就绪」
 
-  为什么不用背景图/插画：孩子端要的是"一眼看懂现在该做什么"，
-  装饰越多越分散注意力。纯文字 + 一个按钮就是最稳的。
+  为什么用 FrameLayout 叠而不是切换 Visibility 的两个页面：
+  相机预览一旦 unbind 再 bind 会有 1~2 秒黑屏，叠加式可以让预览一直在底层待命，
+  只切上面那层的显隐，视觉上更连贯。
 -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/bg_page">
+    android:background="@color/camera_backdrop">
 
-    <LinearLayout
+    <!-- ① 相机画面 -->
+    <androidx.camera.view.PreviewView
+        android:id="@+id/preview_view"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_gravity="center"
-        android:gravity="center_horizontal"
+        android:layout_height="match_parent"
+        app:implementationMode="compatible"
+        app:scaleType="fillCenter" />
+
+    <!-- ② 状态面板：默认可见，进入就绪态后由代码隐藏 -->
+    <LinearLayout
+        android:id="@+id/panel_state"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/bg_page"
+        android:gravity="center"
         android:orientation="vertical"
         android:paddingHorizontal="@dimen/space_xl"
         android:paddingVertical="@dimen/space_xl">
 
-        <!-- 状态图标：颜色由代码切换（品牌色 / good 绿） -->
         <ImageView
             android:id="@+id/iv_state_icon"
             android:layout_width="72dp"
@@ -52,7 +64,6 @@
             android:textColor="@color/text_secondary"
             android:textSize="@dimen/text_body" />
 
-        <!-- 主行动按钮：文案在「授予权限」和「去系统设置」之间切换 -->
         <com.google.android.material.button.MaterialButton
             android:id="@+id/btn_state_action"
             android:layout_width="wrap_content"
@@ -66,5 +77,21 @@
             app:cornerRadius="@dimen/radius_button" />
 
     </LinearLayout>
+
+    <!-- ③ 就绪胶囊：半透明黑底 + 白字，避免在浅色画面里看不清 -->
+    <TextView
+        android:id="@+id/tv_preview_badge"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|end"
+        android:layout_margin="@dimen/space_m"
+        android:background="@drawable/bg_badge"
+        android:paddingHorizontal="@dimen/space_m"
+        android:paddingVertical="@dimen/space_s"
+        android:textColor="@color/white"
+        android:textSize="@dimen/text_caption"
+        android:visibility="gone"
+        tools:text="前置相机 · 就绪"
+        xmlns:tools="http://schemas.android.com/tools" />
 
 </FrameLayout>

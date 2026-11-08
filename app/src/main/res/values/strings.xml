@@ -30,4 +30,10 @@
     <string name="camera_ready_title">相机就绪</string>
     <string name="camera_ready_desc">预览画面将在下一个任务点接入。</string>
 
+    <!-- ============ 相机预览相关 ============ -->
+    <string name="camera_error_title">相机打不开</string>
+    <string name="camera_error_desc">相机启动失败了。\n可能是被别的应用占用，先退出其他拍照/视频应用再回来试。</string>
+    <string name="camera_badge_front">前置相机</string>
+    <string name="camera_badge_back">后置相机</string>
+    <string name="camera_badge_ready">· 就绪</string>
 </resources>
