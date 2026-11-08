@@ -1,18 +1,70 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  监测页 = 一个居中的「状态面板」。
+  五种状态（无相机 / 需要授权 / 授权被拒 / 就绪 / 后续的监测中）共用同一套控件，
+  只切换图标色、标题、说明和按钮文案——比给每个状态各写一个布局好维护得多。
+
+  为什么不用背景图/插画：孩子端要的是"一眼看懂现在该做什么"，
+  装饰越多越分散注意力。纯文字 + 一个按钮就是最稳的。
+-->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@color/bg_page">
 
-    <TextView
-        android:id="@+id/tv_monitor_hint"
-        android:layout_width="wrap_content"
+    <LinearLayout
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_gravity="center"
-        android:gravity="center"
-        android:lineSpacingExtra="@dimen/space_s"
-        android:text="@string/monitor_placeholder"
-        android:textColor="@color/text_secondary"
-        android:textSize="@dimen/text_body" />
+        android:gravity="center_horizontal"
+        android:orientation="vertical"
+        android:paddingHorizontal="@dimen/space_xl"
+        android:paddingVertical="@dimen/space_xl">
+
+        <!-- 状态图标：颜色由代码切换（品牌色 / good 绿） -->
+        <ImageView
+            android:id="@+id/iv_state_icon"
+            android:layout_width="72dp"
+            android:layout_height="72dp"
+            android:contentDescription="@null"
+            android:src="@drawable/ic_nav_monitor"
+            app:tint="@color/brand_primary" />
+
+        <TextView
+            android:id="@+id/tv_state_title"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_l"
+            android:fontFamily="sans-serif-medium"
+            android:text="@string/camera_need_title"
+            android:textColor="@color/text_primary"
+            android:textSize="@dimen/text_title" />
+
+        <TextView
+            android:id="@+id/tv_state_desc"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_m"
+            android:gravity="center"
+            android:lineSpacingExtra="6dp"
+            android:text="@string/camera_need_desc_first"
+            android:textColor="@color/text_secondary"
+            android:textSize="@dimen/text_body" />
+
+        <!-- 主行动按钮：文案在「授予权限」和「去系统设置」之间切换 -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btn_state_action"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_xl"
+            android:minWidth="220dp"
+            android:minHeight="56dp"
+            android:text="@string/camera_grant"
+            android:textSize="@dimen/text_body"
+            app:backgroundTint="@color/brand_primary"
+            app:cornerRadius="@dimen/radius_button" />
+
+    </LinearLayout>
 
 </FrameLayout>

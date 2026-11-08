@@ -12,4 +12,22 @@
     <string name="monitor_placeholder">监测页\nT03 起在这里接相机</string>
     <string name="stats_placeholder">统计页\nT12 起显示今日数据</string>
     <string name="settings_placeholder">设置页\nT13 起可调灵敏度</string>
+
+    <!-- ============ 相机权限相关 ============ -->
+    <string name="camera_need_title">需要相机权限</string>
+    <!-- 首次进入：必须先说清"数据不出本机"，这是儿童产品建立信任的关键一句 -->
+    <string name="camera_need_desc_first">体态监测要用摄像头看你的坐姿。\n画面只在这台设备上处理，不上传、不保存视频。</string>
+    <!-- 拒绝过一次之后：不指责、不重复大道理，只说下一步怎么做 -->
+    <string name="camera_need_desc_again">没有相机权限就没法识别姿势。\n点下面的按钮再授权一次。</string>
+    <string name="camera_denied_title">相机权限被拒绝了</string>
+    <string name="camera_denied_desc">系统不会再弹授权框了。\n请到「设置 → 应用 → 体态 → 权限」里打开相机，再回到这里。</string>
+    <string name="camera_no_hardware_title">没有可用的摄像头</string>
+    <string name="camera_no_hardware_desc">这台设备上找不到摄像头，无法进行体态监测。</string>
+    <string name="camera_grant">授予权限</string>
+    <string name="camera_open_settings">去系统设置</string>
+
+    <!-- 平时进入就绪态（T04 会替换成真实预览） -->
+    <string name="camera_ready_title">相机就绪</string>
+    <string name="camera_ready_desc">预览画面将在下一个任务点接入。</string>
+
 </resources>
