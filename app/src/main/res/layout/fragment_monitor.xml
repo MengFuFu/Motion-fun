@@ -94,4 +94,21 @@
         tools:text="前置相机 · 就绪"
         xmlns:tools="http://schemas.android.com/tools" />
 
+    <!-- ④ 调试 HUD：等宽字体，左下角。
+     别小看这一行文字，T05 到 T08 全靠它判断"模型是不是真的在跑"。 -->
+    <TextView
+        android:id="@+id/tv_hud"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|start"
+        android:layout_margin="@dimen/space_m"
+        android:background="@drawable/bg_badge"
+        android:fontFamily="monospace"
+        android:paddingHorizontal="@dimen/space_m"
+        android:paddingVertical="@dimen/space_s"
+        android:text="@string/pose_hud_idle"
+        android:textColor="@color/white"
+        android:textSize="@dimen/text_caption"
+        android:visibility="gone" />
+
 </FrameLayout>

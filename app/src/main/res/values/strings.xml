@@ -36,4 +36,10 @@
     <string name="camera_badge_front">前置相机</string>
     <string name="camera_badge_back">后置相机</string>
     <string name="camera_badge_ready">· 就绪</string>
+
+    <!-- ============ 姿态识别相关 ============ -->
+    <string name="pose_loading">正在加载识别模型…</string>
+    <string name="pose_hud_idle">等待识别…</string>
+    <string name="pose_model_missing_title">识别模型缺失</string>
+    <string name="pose_model_missing_desc">assets 里找不到 pose_landmarker_lite.task。\n请确认模型文件已放到 app/src/main/assets/ 后重新安装。</string>
 </resources>

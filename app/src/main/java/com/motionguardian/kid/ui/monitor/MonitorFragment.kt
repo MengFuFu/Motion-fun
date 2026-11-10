@@ -1,11 +1,15 @@
 package com.motionguardian.kid.ui.monitor
 
+import android.Manifest
 import android.os.Bundle
+import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import androidx.annotation.ColorRes
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
@@ -18,21 +22,24 @@ import kotlinx.coroutines.Job
 import javax.inject.Inject
 import com.motionguardian.kid.core.camera.CameraPreviewController
 import com.motionguardian.kid.core.camera.CameraStartResult
+import com.motionguardian.kid.core.pose.PoseFrame
+import com.motionguardian.kid.core.pose.PoseFrameAnalyzer
+import com.motionguardian.kid.core.pose.PoseLandmarkerHelper
+import com.motionguardian.kid.core.pose.PoseStats
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.util.Locale
 
 /**
  * 监测页。
  *
- * 本任务点做到「权限 → 相机预览」，还不做姿态识别（T05）。
- *
- * 页面结构是三层：预览在最底、状态面板盖在上面、就绪胶囊浮在右上角。
- * 状态机仍然是「每次渲染都重新算真实状态」，不缓存 boolean——
- * 权限和相机都是外部可变状态，缓存只会制造不一致。
- *
- * 生命周期要点（这步最容易错的就这三条）：
- *  1. 相机绑 viewLifecycleOwner，不绑 Fragment 自己、更不绑 Activity；
- *  2. 启动放在 onViewCreated/onResume 之后的协程里，不要在 onCreateView 里同步做；
- *  3. onDestroyView 必须 stop()，否则 Surface 泄漏、再进来黑屏。
+ * T05 起这个页面有三条并发的"流"：
+ *   1. 相机采集（CameraX 内部线程）
+ *   2. 模型推理（CameraX 分析线程）
+ *   3. UI 刷新（主线程）
+ * 三者的交汇点只有一处：分析器回调 → 切主线程 → 更新 HUD。
+ * 任何一个回调里直接碰 View 都会崩（CalledFromWrongThreadException）。
  */
 @AndroidEntryPoint
 class MonitorFragment : Fragment() {
@@ -50,9 +57,17 @@ class MonitorFragment : Fragment() {
     /** 相机控制器不注入（它只需要 Context，没必要进 DI 图），View 重建时一起重建。 */
     private var previewController: CameraPreviewController? = null
 
+    /** 帧分析器。View 重建时新建一个，绑定到当前视图。 */
+    private var analyzer: PoseFrameAnalyzer? = null
+
+    /** 模型实例。创建很贵，整个 View 生命周期内只建一次。 */
+    private var poseEngine: PoseLandmarkerHelper? = null
+
+    private var engineJob: Job? = null
     /** 启动预览的协程，用于避免重复启动。 */
     private var startJob: Job? = null
 
+    private var engineReady = false
     /** 预览是否已经成功绑上（绑定成功一次就不再重复绑）。 */
     private var previewBound = false
 
@@ -76,17 +91,13 @@ class MonitorFragment : Fragment() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        // 关键：注册必须发生在 STARTED 之前，onCreate 是最晚的安全点。
-        permissionLauncher = CameraPermissionLauncher(this) {
-            granted ->
+        permissionLauncher = CameraPermissionLauncher(this) { granted ->
             autoRequestDone = true
-            // 不管授权与否都重画：拒绝后文案要从「首次」换成「再授权一次」，
-            // 永久拒绝后按钮要从「授予权限」换成「去系统设置」。
-            render()
-            if(granted) {
-                // T04 会在这里启动相机预览
+            if (granted) {
+                // 重新走一遍完整流程：加载模型 → 起相机
+                initPoseEngine()
             }
+            render()
         }
     }
 
@@ -103,6 +114,11 @@ class MonitorFragment : Fragment() {
         super.onViewCreated(view, savedInstanceState)
 
         previewController = CameraPreviewController(requireContext())
+        analyzer = PoseFrameAnalyzer(
+            onFrame = ::onPoseFrame,
+            onStats = ::onPoseStats,
+            onError = ::onPoseError,
+        )
         binding.btnStateAction.setOnClickListener { onActionClick() }
 
         render()
@@ -120,18 +136,63 @@ class MonitorFragment : Fragment() {
     override fun onDestroyView() {
         super.onDestroyView()
 
-        // 顺序很重要：先取消协程，再解绑相机，最后丢引用。
-        // 反过来的话，协程可能在解绑之后又把相机绑上，最后一帧泄漏。
+        // 顺序：先停相机（停止投递新帧）→ 再关模型（此时没有推理在跑）→ 最后丢引用
         startJob?.cancel()
         startJob = null
         previewController?.stop()
         previewController = null
+
+        // 解绑分析器，避免 CameraX 持有它导致 Fragment 泄漏
+        analyzer = null
+
+        engineJob?.cancel()
+        engineJob = null
+        poseEngine?.close()
+        poseEngine = null
+        engineReady = false
         previewBound = false
-        // 必须置 null：Fragment 进返回栈时 View 已销毁，留着引用就是内存泄漏
+
         _binding = null
     }
 
-    // ==================== 状态计算 ====================
+    // ==================== 模型加载 ====================
+    /**
+     * 加载模型。幂等：已在加载或已就绪时直接返回。
+     */
+    private fun initPoseEngine() {
+        if (engineReady) {
+            startPreview()
+            return
+        }
+        if (engineJob?.isActive == true) return
+
+        engineJob = viewLifecycleOwner.lifecycleScope.launch {
+            binding.tvPreviewBadge.text = getString(R.string.pose_loading)
+            binding.tvPreviewBadge.visibility = View.VISIBLE
+
+            try {
+                // Default 而不是 IO：这里是 CPU 密集（TFLite 初始化），
+                // IO 调度器没有并发上限，放进去会和其他 IO 任务抢线程
+                val engine = withContext(Dispatchers.Default) {
+                    PoseLandmarkerHelper(requireContext())
+                }
+                poseEngine = engine
+                analyzer?.engine = engine
+                engineReady = true
+                render()
+            } catch (t: Throwable) {
+                Log.e(TAG, "模型加载失败", t)
+                showPanel(
+                    titleRes = R.string.pose_model_missing_title,
+                    descRes = R.string.pose_model_missing_desc,
+                    actionTextRes = null,
+                    iconColorRes = R.color.semantic_alert,
+                )
+            }
+        }
+    }
+
+    // ==================== 状态与渲染 ====================
 
     /**
      * 每次调用都向系统重新问一遍，不缓存。
@@ -140,6 +201,12 @@ class MonitorFragment : Fragment() {
     private fun resolveState(): UiState {
         if(!cameraChecker.hasCameraHardware()) return UiState.NO_CAMERA
         if(cameraChecker.isPermissionGranted()) return UiState.READY
+
+        val canAskAgain = ActivityCompat.shouldShowRequestPermissionRationale(
+            requireActivity(),
+            Manifest.permission.CAMERA,
+        )
+        if (canAskAgain) return UiState.REQUESTABLE
 
         // 还能弹框 → 说明是首次，或者拒绝过但没勾「不再询问」
         // 靠我们自己记的标记区分——这就是 CameraChecker.wasAskedBefore() 的唯一用途。
@@ -156,39 +223,38 @@ class MonitorFragment : Fragment() {
             UiState.READY -> {
                 // 就绪：藏面板、亮出预览
                 binding.panelState.visibility = View.GONE
-                startPreview()
+                // 权限有了不代表能开工：模型还没加载完就先等
+                if (!engineReady) {
+                    initPoseEngine()
+                } else {
+                    startPreview()
+                }
             }
 
-            UiState.NO_CAMERA -> {
-                showPanel(
-                    titleRes = R.string.camera_no_hardware_title,
-                    descRes = R.string.camera_no_hardware_desc,
-                    actionTextRes = null,
-                    iconColorRes = R.color.text_secondary,
-                )
-            }
+            UiState.NO_CAMERA -> showPanel(
+                R.string.camera_no_hardware_title,
+                R.string.camera_no_hardware_desc,
+                null,
+                R.color.text_secondary,
+            )
 
-            UiState.REQUESTABLE -> {
-                showPanel(
-                    titleRes = R.string.camera_need_title,
-                    descRes = if (cameraChecker.wasAskedBefore()) {
-                        R.string.camera_need_desc_again
-                    } else {
-                        R.string.camera_need_desc_first
-                    },
-                    actionTextRes = R.string.camera_grant,
-                    iconColorRes = R.color.brand_primary,
-                )
-            }
+            UiState.REQUESTABLE -> showPanel(
+                R.string.camera_need_title,
+                if (cameraChecker.wasAskedBefore()) {
+                    R.string.camera_need_desc_again
+                } else {
+                    R.string.camera_need_desc_first
+                },
+                R.string.camera_grant,
+                R.color.brand_primary,
+            )
 
-            UiState.PERMANENTLY_DENIED -> {
-                showPanel(
-                    titleRes = R.string.camera_denied_title,
-                    descRes = R.string.camera_denied_desc,
-                    actionTextRes = R.string.camera_open_settings,
-                    iconColorRes = R.color.semantic_warn,
-                )
-            }
+            UiState.PERMANENTLY_DENIED -> showPanel(
+                R.string.camera_denied_title,
+                R.string.camera_denied_desc,
+                R.string.camera_open_settings,
+                R.color.semantic_warn,
+            )
         }
     }
 
@@ -201,6 +267,7 @@ class MonitorFragment : Fragment() {
     ) {
         binding.panelState.visibility = View.VISIBLE
         binding.tvPreviewBadge.visibility = View.GONE
+        binding.tvHud.visibility = View.GONE
 
         binding.tvStateTitle.setText(titleRes)
         binding.tvStateDesc.setText(descRes)
@@ -228,33 +295,41 @@ class MonitorFragment : Fragment() {
         if(previewBound) return
         if(startJob?.isActive == true) return
         val controller = previewController ?: return
+        val frameAnalyzer = analyzer ?: return
         val owner = viewLifecycleOwner
 
-        startJob = viewLifecycleOwner.lifecycleScope.launch {
-            when(val result = controller.start(binding.previewView, owner)) {
+        startJob = owner.lifecycleScope.launch {
+            // 1. 建分析用例
+            val analysis = ImageAnalysis.Builder()
+                // KEEP_ONLY_LATEST：处理不过来就丢旧帧，永远只处理最新的一张。
+                // 用 QUEUE 会积压，画面越跑越延迟（延迟 1 秒以上）
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                // 输出 RGBA 而不是默认 YUV：我们不需要 YUV，直接拷进 Bitmap 最快。
+                // 代价是内存带宽略高，但省掉了 YUV→RGB 的手写转换
+                .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
+                .build()
+            analysis.setAnalyzer(CameraExecutor, frameAnalyzer)
+
+            // 2. 和 Preview 一起绑定（必须同一次 bind，否则会互相 unbind）
+            when(val result = controller.start(binding.previewView, owner, listOf(analysis))) {
                 is CameraStartResult.Success -> {
                     previewBound = true
                     showBadge(result.lensFacing)
                 }
 
-                CameraStartResult.NoCamera -> {
-                    // 理论上 hasCameraHardware 已经挡过一次，这里是双保险
-                    showPanel(
-                        titleRes = R.string.camera_no_hardware_title,
-                        descRes = R.string.camera_no_hardware_desc,
-                        actionTextRes = null,
-                        iconColorRes = R.color.text_secondary,
-                    )
-                }
+                CameraStartResult.NoCamera -> showPanel(
+                    R.string.camera_no_hardware_title,
+                    R.string.camera_no_hardware_desc,
+                    null,
+                    R.color.text_secondary,
+                )
 
-                is CameraStartResult.Failed -> {
-                    showPanel(
-                        titleRes = R.string.camera_error_title,
-                        descRes = R.string.camera_error_desc,
-                        actionTextRes = null,
-                        iconColorRes = R.color.semantic_alert,
-                    )
-                }
+                is CameraStartResult.Failed -> showPanel(
+                    R.string.camera_error_title,
+                    R.string.camera_error_desc,
+                    null,
+                    R.color.semantic_alert,
+                )
             }
         }
     }
@@ -268,6 +343,33 @@ class MonitorFragment : Fragment() {
         binding.tvPreviewBadge.text =
             getString(lens) + " " + getString(R.string.camera_badge_ready)
         binding.tvPreviewBadge.visibility = View.VISIBLE
+    }
+
+    // ==================== 识别回调（都在分析线程，必须切主线程） ====================
+    private fun onPoseFrame(frame: PoseFrame) {
+        // 这里刻意什么都不做——T06 的指标计算会接管这个回调。
+        // 现在留空是为了让 T05 的验证边界干净：只验证"能拿到帧"。
+    }
+
+    private fun onPoseStats(stats: PoseStats) {
+        // 分析线程 → 主线程。用 post 而不是 runOnUiThread，
+        // 因为 post 在视图已 detach 时会被丢弃，不会崩
+        binding?.root?.post {
+            val b = _binding ?: return@post
+            b.tvHud.visibility = View.VISIBLE
+            b.tvHud.text = String.format(
+                Locale.US,
+                "%.1f fps  %d ms  %s  #%d",
+                stats.fps,
+                stats.lastInferenceMs,
+                if (stats.hasPose) "有姿态" else "无姿态",
+                stats.totalFrames,
+            )
+        }
+    }
+
+    private fun onPoseError(t: Throwable) {
+        Log.e(TAG, "识别出错", t)
     }
 
     // ==================== 交互 ====================
@@ -304,6 +406,18 @@ class MonitorFragment : Fragment() {
 
         autoRequestDone = true
         requestPermission()
+    }
+
+    private companion object {
+        const val TAG = "MonitorFragment"
+
+        /**
+         * 相机分析线程。单线程 + 高优先级：
+         * MediaPipe 推理是串行的，多线程没有收益，反而增加锁竞争。
+         */
+        val CameraExecutor = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+            Thread(r, "pose-analysis").apply { priority = Thread.NORM_PRIORITY + 1 }
+        }
     }
 }
 

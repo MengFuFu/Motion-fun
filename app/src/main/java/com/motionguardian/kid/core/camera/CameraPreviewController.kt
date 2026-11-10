@@ -5,6 +5,7 @@ import android.content.Context
 import android.util.Log
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.Preview
+import androidx.camera.core.UseCase
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.lifecycle.LifecycleOwner
@@ -47,16 +48,17 @@ class CameraPreviewController(
     private var bound: Boolean = false
 
     /**
-     * 启动预览。可重复调用，但重复绑定会先解绑旧的（幂等）。
+     * 启动预览。可重复调用，重复绑定会先解绑旧的（幂等）。
      *
-     * @param previewView 显示画面的容器
-     * @param owner       绑定目标，必须传 viewLifecycleOwner
-     * @return 结果；失败不会抛异常，由调用方决定怎么提示
+     * @param extraUseCases 额外要一起绑的用例，例如 ImageAnalysis。
+     *                      必须和 Preview 在同一次 bindToLifecycle 里绑定——
+     *                      分两次绑会触发 unbindAll，把前一个解掉。
      */
     @SuppressLint("RestrictedApi")
     suspend fun start(
         previewView: PreviewView,
-        owner: LifecycleOwner
+        owner: LifecycleOwner,
+        extraUseCases: List<UseCase> = emptyList()
     ): CameraStartResult {
         //1. 拿进程级单例
         val cameraProvider = try {
@@ -82,7 +84,12 @@ class CameraPreviewController(
         // IllegalArgumentException: LifecycleOwner is already bound
         return try {
             cameraProvider.unbindAll()
-            cameraProvider.bindToLifecycle(owner, selector, preview)
+            cameraProvider.bindToLifecycle(
+                owner,
+                selector,
+                preview,
+                *extraUseCases.toTypedArray(),
+            )
             bound = true
             CameraStartResult.Success(selector.lensFacing)
         } catch (c: CancellationException) {

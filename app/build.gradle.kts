@@ -97,6 +97,7 @@ dependencies {
 
     // ---- 端侧姿态识别 ----
     implementation(libs.mediapipe.tasks.vision)
+    implementation("com.google.mediapipe:tasks-vision:0.10.14")
 
     // ---- 测试 ----
     testImplementation(libs.junit)
