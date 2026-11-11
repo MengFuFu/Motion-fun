@@ -26,10 +26,14 @@ import com.motionguardian.kid.core.pose.PoseFrame
 import com.motionguardian.kid.core.pose.PoseFrameAnalyzer
 import com.motionguardian.kid.core.pose.PoseLandmarkerHelper
 import com.motionguardian.kid.core.pose.PoseStats
+import com.motionguardian.kid.domain.filter.GateCounter
+import com.motionguardian.kid.domain.filter.LandmarkGate
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Locale
+import com.motionguardian.kid.domain.geometry.PostureMetricsCalculator
+import com.motionguardian.kid.domain.model.PostureMetrics
 
 /**
  * 监测页。
@@ -73,6 +77,17 @@ class MonitorFragment : Fragment() {
 
     // 只在「本次进入页面」自动弹一次，避免用户拒绝后又立刻被弹第二次。
     private var autoRequestDone = false
+
+    /** 连续无效帧计数：用于区分"偶尔丢一帧"和"真的看不到人"。 */
+    private val gateCounter = GateCounter(warnThreshold = 3)
+
+    /**
+     * 最近一次成功算出的指标。
+     * 由分析线程写、主线程读，所以必须 @Volatile——
+     * 不加的话主线程可能一直读到 null（JMM 不保证可见性）。
+     */
+    @Volatile
+    private var lastMetrics: PostureMetrics? = null
 
     /**
      * 页面状态。用 enum 而不是 sealed class：这里没有携带数据的需要，
@@ -346,25 +361,64 @@ class MonitorFragment : Fragment() {
     }
 
     // ==================== 识别回调（都在分析线程，必须切主线程） ====================
+    /**
+     * 收到一帧关键点。**运行在分析线程**，绝对不能碰 UI。
+     *
+     * 这里只做两件轻量的事：算指标、更新计数器。
+     * 真正的界面刷新交给 onPoseStats（它会被切到主线程）。
+     */
     private fun onPoseFrame(frame: PoseFrame) {
-        // 这里刻意什么都不做——T06 的指标计算会接管这个回调。
-        // 现在留空是为了让 T05 的验证边界干净：只验证"能拿到帧"。
+        val metrics = PostureMetricsCalculator.calculate(frame)
+
+        if (metrics == null) {
+            // 关键点不可信或人太远：累加无效帧计数，但不重置 lastMetrics。
+            // 为什么不重置：短暂丢一帧时保留上一帧数值，界面不会闪烁。
+            gateCounter.miss()
+        } else {
+            gateCounter.reset()
+            lastMetrics = metrics
+        }
     }
 
+    /**
+     * 每帧都会回调，用来刷新 HUD。**运行在分析线程**，必须切主线程。
+     */
     private fun onPoseStats(stats: PoseStats) {
-        // 分析线程 → 主线程。用 post 而不是 runOnUiThread，
-        // 因为 post 在视图已 detach 时会被丢弃，不会崩
         binding?.root?.post {
             val b = _binding ?: return@post
             b.tvHud.visibility = View.VISIBLE
-            b.tvHud.text = String.format(
+
+            // 第一行：管道健康度。帧号不涨 = 管道堵了；耗时暴涨 = 设备吃力
+            val head = String.format(
                 Locale.US,
-                "%.1f fps  %d ms  %s  #%d",
+                "%.1ffps %dms #%d",
                 stats.fps,
                 stats.lastInferenceMs,
-                if (stats.hasPose) "有姿态" else "无姿态",
                 stats.totalFrames,
             )
+
+            // 第二、三行：指标数值。没有数值时分清"没人"和"看不清"
+            val m = lastMetrics
+            val body = if (m == null) {
+                if (gateCounter.shouldWarn) {
+                    "看不到你 · 请坐正对镜头"
+                } else {
+                    "识别中…"
+                }
+            } else {
+                String.format(
+                    Locale.US,
+                    "头垂 %.2f  肩斜 %.1f°  头斜 %.1f°\n躯干 %.1f°  颈前 %.2f  肩宽 %.2f",
+                    m.headDropRatio,
+                    m.shoulderTiltDeg,
+                    m.headTiltDeg,
+                    m.trunkTiltDeg,
+                    m.neckForwardRatio,
+                    m.shoulderWidth,
+                )
+            }
+
+            b.tvHud.text = "$head\n$body"
         }
     }
 
